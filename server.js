@@ -93,10 +93,14 @@ async function startBot() {
 
         try {
            // server.js
-            const result = await menuController(from, text);
+            const result = await menuController(from, text, sock);
 
-            if (result) {
-                await sock.sendMessage(from, result); // result é objeto com text ou image+caption
+            if (!result) return;
+
+            if (typeof result === "string") {
+                await sock.sendMessage(from, { text: result });
+            } else {
+                await sock.sendMessage(from, result);
             }
         } catch (err) {
             console.error('❌ Erro no menuController:', err);

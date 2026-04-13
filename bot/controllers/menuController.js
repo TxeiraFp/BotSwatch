@@ -1,79 +1,97 @@
-// menuController.js
-const estados = {};
-const { gerarTabela, buscarResultadoFederal, historicoFederal } = require('../service/bixoService.js');
+const {
+    process: bixoProcess,
+    buscarResultadoFederal,
+    historicoFederal
+} = require('../service/bixoService.js');
 
-async function process(from, text) {
+const { toWhatsappJid } = require('../utils/jid');
+
+const estados = {};
+const firstMessage = {};
+
+async function process(from, text, sock) {
+
     if (typeof text !== "string") text = String(text || "");
     const lower = text.toLowerCase().trim();
 
-    // cria estado se não existir
-    if (!estados[from]) {
-        estados[from] = { etapa: "inicio" };
+    const jid = toWhatsappJid(from);
+    if (!jid) return { text: "❌ jid inválido" };
+
+    // ================= PRIMEIRA MENSAGEM =================
+    if (!firstMessage[from]) {
+        firstMessage[from] = true;
+
+        estados[jid] = { etapa: "menu" };
+
         return menuInicial();
     }
 
-    const estado = estados[from];
+    if (!estados[jid]) {
+        estados[jid] = { etapa: "menu" };
+    }
 
-    // comando global (funciona em qualquer etapa)
+    const estado = estados[jid];
+
+    // ================= COMANDO MENU GLOBAL =================
     if (lower === "menu") {
-        delete estados[from];
+        estado.etapa = "menu";
         return menuInicial();
     }
 
-    // fluxo principal
-    if (estado.etapa === "inicio") {
-        if (lower === "1") {
-            estado.etapa = "jogo";
-            const tabela = gerarTabela();
+    // ================= MENU =================
+    if (estado.etapa === "menu") {
 
-            return {
-                text: `${tabela}`
-            };
+        if (lower === "1") {
+            estado.etapa = "rifa";
+
+            return await bixoProcess({
+                from,
+                text: "",
+                estado
+            });
         }
 
         if (lower === "2") {
             const ultimo = await buscarResultadoFederal();
+            if (!ultimo) return { text: "❌ Sem resultado." };
 
-            if (!ultimo) {
-                return { text: "❌ Não foi possível obter o resultado." };
-            }
-
-            return {
-                text: `🏆 Último resultado:\nBixo: ${ultimo.bixo}\nNúmero: ${ultimo.numero}`
-            };
+            return { text: `🏆 ${ultimo.bixo} - ${ultimo.numero}` };
         }
 
         if (lower === "3") {
             const historico = await historicoFederal();
 
-            if (!historico.length) {
-                return { text: "Nenhum histórico disponível." };
-            }
-
             return {
                 text: historico.map(r =>
-                    `📅 ${r.data.toLocaleDateString()} - ${r.bixo} (${r.numero})`
+                    `📅 ${r.data.toLocaleDateString()} - ${r.bixo}`
                 ).join("\n")
             };
         }
 
-        // entrada inválida no menu
         return {
-            text: "❌ Opção inválida.\n\nDigite 1, 2 ou 3.\nOu 'menu' para reiniciar."
+            text: "❌ opção inválida\n\n👉 Digite *menu* para ver as opções."
         };
     }
 
-    // fallback (caso algo saia do fluxo)
+    // ================= RIFA =================
+    if (estado.etapa === "rifa") {
+        return await bixoProcess({
+            from,
+            text,
+            estado
+        });
+    }
+
+    // ================= FALLBACK GLOBAL =================
     return {
-        text: 'Digite "menu" para voltar ao início.'
+        text: "❌ Você está fora do fluxo.\n👉 Digite *menu* para acessar o sistema."
     };
 }
 
-// função separada (melhor prática)
 function menuInicial() {
     return {
         image: { url: './assets/rifa.jpeg' },
-        caption: `🎉 Bem-vindo!\n\nEscolha uma opção:\n\n1️⃣ Jogar rifa\n2️⃣ Último resultado\n3️⃣ Histórico`
+        caption: `🎉 MENU\n\n1️⃣ Jogar\n2️⃣ Resultado\n3️⃣ Histórico`
     };
 }
 

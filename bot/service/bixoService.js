@@ -1,247 +1,231 @@
-const estados = {};
 const bixos = require("../data/bixos");
-//const { buscarResultadoFederal } = require("./federalService");
-//const { criarPagamentoPix } = require("./asaasService");
-//const Compra = require("../models/Compra");
-const path = require('path');
-const tempFile = path.join(__dirname, 'temp_qr.png');
+const UserSchema = require("../model/game.js");
 
-function capitalize(str) {
-    return str.charAt(0).toUpperCase() + str.slice(1);
+global.estados = global.estados || {};
+const estados = global.estados;
+
+function removerAcentos(str = "") {
+    return str
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .trim();
+}
+
+function toWhatsappJid(numero) {
+    if (!numero) return null;
+
+    if (typeof numero !== "string") {
+        numero = String(numero);
+    }
+
+    if (numero.includes("@s.whatsapp.net")) {
+        return numero;
+    }
+
+    return numero.replace(/\D/g, "") + "@s.whatsapp.net";
+}
+
+function telefoneValido(numero) {
+    return /\d{10,11}/.test(numero.replace(/\D/g, ""));
+}
+
+function buscarBixo(nome) {
+    const n = removerAcentos(nome);
+
+    return Object.values(bixos).find(b =>
+        removerAcentos(b.nome) === n
+    );
 }
 
 function gerarTabela() {
-    let msg = '📋 *Tabela dos Bixos*:\n\n';
-    for (let bixo in bixos) {
-        const { emoji, numeros } = bixos[bixo];
-        if (numeros.length === 0) {
-            msg += `${emoji} *${capitalize(bixo)}*: ❌ VENDIDO\n\n`;
-        } else {
-            msg += `${emoji} *${capitalize(bixo)}*: ${numeros.map(n => n.toString().padStart(2, '0')).join(', ')}\n\n`;
-        }
+    let msg = "📋 *Tabela dos Bixos*\n\n";
+
+    for (let key in bixos) {
+        const b = bixos[key];
+
+        const dezenas = (b.dezenas || [])
+            .map(n => n.toString().padStart(2, "0"))
+            .join(",");
+
+        msg += `${b.emoji} *${b.nome}* `;
+
+        msg += b.vendido
+            ? "❌ VENDIDO\n\n"
+            : `✔️ (${dezenas})\n\n`;
     }
-    msg += '✍️ *Digite o nome de um ou mais bixo para comprar*.\n\n';
-    msg += 'Digite *Menu* para ir ao inicio.';
+
+    msg += "✍️ Digite o bixo para comprar.";
+
     return msg;
 }
 
-function removerAcentos(str) {
-    return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-
-// 🔹 Sempre retorna JID válido para envio
-function toWhatsappJid(numero) {
-    if (!numero) return null;
-    numero = numero.replace(/\D/g, ""); // remove tudo que não for número
-    return `${numero}@s.whatsapp.net`;
-}
-
-function rifaAberta() {
-    const agora = new Date();
-    const hora = agora.getHours();
-    return (hora >= 20 || hora < 19);
-}
-
-async function enviarMenu(from, sock) {
-    const jid = toWhatsappJid(from);
-    if (!jid) return;
-
-    await sock.sendMessage(jid, {
-        image: { url: './assets/rifa.jpeg' },
-        caption: `🎉 *Bem-vindo à Rifa do Bixo!*\n\nEscolha uma opção:\n\n1️⃣ Jogar rifa\n2️⃣ Último resultado\n3️⃣ Histórico`
-    });
-}
-
+// ================= RIFA CORE =================
 async function process(context) {
-    let { text, from, sock } = context;
-    if (typeof text !== 'string') text = String(text || '');
-    const lower = removerAcentos(text.toLowerCase().trim());
-    const jid = toWhatsappJid(from);
-    if (!jid) return;
+    let { text, from } = context;
 
-    if (!estados[jid]) {
-        estados[jid] = { etapa: 'menu' };
-        await enviarMenu(jid, sock);
-        return;
-    }
-    
-    const estado = estados[jid];
-    
-    if (lower === 'menu' || lower === 'voltar') {
-        estado.etapa = 'menu';
-        await enviarMenu(jid, sock);
-        return;
-    }
-    
-    // ================= MENU =================
-    if (estado.etapa === 'menu') {
-        try {
-            if (lower === '1') {
-                if (!rifaAberta()) return "⏰ A rifa está fechada. Próxima abertura às 20h.";
-                estado.etapa = 'jogo';
-                return gerarTabela();
-            }
+    text = String(text || "").trim();
+    const lower = removerAcentos(text);
 
-            if (lower === '2') {
-                const resultado = await buscarResultadoFederal();
-                if (!resultado) return "❌ Resultado ainda não disponível.";
+    const sessionId = from;
 
-                let msg = `🏆 Resultado da Federal (Concurso ${resultado.concurso} - ${resultado.data}):\n\n`;
-                resultado.dezenas.forEach((dezena, i) => {
-                    msg += `🎖 ${i + 1}º: ${dezena}\n`;
-                });
-                msg += `\n1️⃣ Jogar rifa\n3️⃣ Histórico`;
-
-                estado.etapa = 'menu';
-                return msg;
-            }
-
-            if (lower === '3') {
-                const compras = await Compra.find({ telefone: jid })
-                    .sort({ data: -1 })
-                    .limit(10);
-
-                if (compras.length === 0) {
-                    return "📭 *Histórico de Compras*\n\nVocê ainda não tem histórico.";
-                }
-
-                let msg = "📜 *SEU HISTÓRICO DE COMPRAS*\n";
-                msg += "━━━━━━━━━━━━━━━━━━\n\n";
-
-                compras.forEach((c, index) => {
-                    msg += `🧾 *Compra ${index + 1}*\n`;
-                    msg += `📅 Data: ${c.data.toLocaleString()}\n`;
-                    msg += `🎟️ Bicho: ${c.bixo}\n`;
-                    msg += `🔢 Dezenas: ${c.dezenas.join(", ")}\n`;
-                    msg += `💰 Status: ${c.status}\n`;
-                    msg += "──────────────────\n";
-                });
-
-                msg += "\n1️⃣ Jogar rifa\n2️⃣ Último resultado";
-                estado.etapa = 'menu';
-                return msg;
-            }
-        } catch (error) {
-            console.error(error);
-            return "❌ Erro ao processar solicitação.";
-        }
+    if (!estados[sessionId]) {
+        estados[sessionId] = {
+            etapa: "rifa",
+            tempCompras: [],
+            nome: null,
+            telefone: null
+        };
     }
 
-    // ================= JOGO =================
-   // ================= JOGO =================
-if (estado.etapa === 'jogo') {
-    try {
-        if (!rifaAberta()) {
-            estado.etapa = 'menu';
-            return "⏰ A rifa está fechada.";
+    const estado = estados[sessionId];
+
+    // ================= RIFA =================
+    if (estado.etapa === "rifa") {
+
+        const nomes = text.split(",").map(n => n.trim()).filter(Boolean);
+
+        if (!nomes.length) {
+            return { text: gerarTabela() };
         }
 
-        const nomes = lower.split(',').map(n => n.trim());
         let respostas = [];
         let compras = [];
 
         for (const nome of nomes) {
-            const nomeNormalizado = removerAcentos(nome.toLowerCase());
 
-            if (!bixos[nomeNormalizado]) {
-                respostas.push(`❌ Bixo inválido: ${capitalize(nome)}`);
+            const bixo = buscarBixo(nome);
+
+            if (!bixo) {
+                respostas.push(`❌ Bixo inválido: ${nome}`);
                 continue;
             }
 
-            const { emoji, numeros } = bixos[nomeNormalizado];
-
-            if (numeros.length === 0) {
-                respostas.push(`⚠️ O bixo ${emoji} *${capitalize(nome)}* já foi comprado.`);
+            if (bixo.vendido) {
+                respostas.push(`⚠️ ${bixo.nome} já foi vendido.`);
                 continue;
             }
 
-            const numerosComprados = numeros.map(n => n.toString().padStart(2, '0'));
-
-            compras.push({
-                nome: capitalize(nome),
-                emoji,
-                numeros: numerosComprados
-            });
+            compras.push(bixo);
+            respostas.push(`✅ ${bixo.nome} selecionado.`);
         }
 
         if (compras.length > 0) {
-            estado.etapa = "coletando_dados";
-            estado.carrinho = compras;
+            estado.etapa = "nome";
+            estado.tempCompras = compras;
 
-            return `📝 *Quase lá!*\n\nInforme seu nome e telefone.\n\nExemplo:\nJoão Silva, 71999999999`;
+            return {
+                text: respostas.join("\n") +
+                    "\n\n📝 Digite seu nome completo:"
+            };
         }
 
-        return respostas.join('\n');
-
-    } catch (error) {
-        console.error(error);
-        return "❌ Erro ao processar compra.";
+        return { text: gerarTabela() };
     }
-}
 
+    // ================= NOME =================
+    if (estado.etapa === "nome") {
 
-// ================= COLETANDO DADOS =================
-if (estado.etapa === "coletando_dados") {
-    try {
-        const partes = text.split(",");
+        estado.nome = text;
+        estado.etapa = "telefone";
 
-        if (partes.length < 2) {
-            return "❌ Envie no formato:\nNome, telefone";
+        return {
+            text: "📱 Agora digite seu telefone com DDD:"
+        };
+    }
+
+    // ================= TELEFONE =================
+    if (estado.etapa === "telefone") {
+
+        if (!telefoneValido(text)) {
+            return { text: "❌ Telefone inválido." };
         }
 
-        const nome = partes[0].trim();
-        const telefone = partes[1].replace(/\D/g, "");
+        estado.telefone = text;
 
-        if (!nome || telefone.length < 10) {
-            return "❌ Dados inválidos.\nExemplo:\nJoão Silva, 71999999999";
-        }
-
-        const compras = estado.carrinho;
-        const valorTotal = compras.length * 5.00;
-
-        const pagamento = await criarPagamentoPix({
-            valor: valorTotal,
-            descricao: `Compra de ${compras.length} rifa(s)`,
-            nome,
-            email: "cliente@email.com",
-            cpfCnpj: "00000000000"
+        const game = await createGame({
+            name: estado.nome,
+            phone: estado.telefone,
+            bixosEscolhidos: estado.tempCompras
         });
 
-        for (const item of compras) {
-            await Compra.create({
-                telefone,
-                nome,
-                bixo: item.nome,
-                dezenas: item.numeros,
-                valor: 5.0,
-                pagamentoId: pagamento.id,
-                status: "pending"
-            });
+        if (!game) {
+            return { text: "❌ Erro ao salvar compra." };
         }
 
-        const copiaCola = pagamento.payload;
+        // marca venda
+        for (const b of estado.tempCompras) {
+            b.vendido = true;
+            b.dono = estado.telefone;
+        }
 
-        estado.etapa = "aguardando_pagamento";
+        const resumo = estado.tempCompras
+            .map(b => `🐾 ${b.nome} - ${b.dezenas?.join(", ")}`)
+            .join("\n");
 
-        await sock.sendMessage(jid, {
+        // reset correto
+        estados[sessionId] = {
+            etapa: "rifa",
+            tempCompras: [],
+            nome: null,
+            telefone: null
+        };
+
+        return {
             text:
-                `💳 *Pagamento via PIX - Rifa do Bixo*\n\n` +
-                `💰 Valor: R$ ${valorTotal.toFixed(2)}\n\n` +
-                `🧾 PIX Copia e Cola:\n\`\`\`\n${copiaCola}\n\`\`\``
+                "✅ COMPRA CONFIRMADA!\n\n" +
+                `👤 Nome: ${estado.nome}\n` +
+                `📱 Telefone: ${estado.telefone}\n\n` +
+                resumo
+        };
+    }
+
+    return { text: "❌ fluxo inválido. Digite menu." };
+}
+
+// ================= CREATE GAME =================
+async function createGame({ name, phone, bixosEscolhidos }) {
+    try {
+
+        if (!telefoneValido(phone)) {
+            throw new Error("Telefone inválido");
+        }
+
+        if (!Array.isArray(bixosEscolhidos) || bixosEscolhidos.length === 0) {
+            throw new Error("Sem bixos selecionados");
+        }
+
+        const dezenas = bixosEscolhidos.flatMap(b => b.dezenas || []);
+
+        console.log("📦 COMPRA SALVANDO:", {
+            name,
+            phone,
+            bixos: bixosEscolhidos.length
         });
 
-        return;
+        const game = await UserSchema.create({
+            nome: name,
+            phone: phone, // 🔥 identidade REAL
+            bixos: bixosEscolhidos.map(b => ({
+                nome: b.nome,
+                dezenas: b.dezenas || []
+            })),
+            dezenas,
+            createdAt: new Date()
+        });
 
-    } catch (error) {
-        console.error(error);
-        return "❌ Erro ao processar seus dados.";
+        return game;
+
+    } catch (err) {
+        console.error("🔥 ERRO MONGO:", err.message);
+        return null;
     }
 }
 
-
-// ================= AGUARDANDO PAGAMENTO =================
-if (estado.etapa === "aguardando_pagamento") {
-    return "⏳ Estamos aguardando a confirmação do pagamento PIX...";
-}
-}
-module.exports = { process, estados, gerarTabela };
+module.exports = {
+    process,
+    gerarTabela,
+    buscarBixo,
+    toWhatsappJid,
+    createGame
+};
