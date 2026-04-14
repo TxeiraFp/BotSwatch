@@ -13,6 +13,19 @@ const GameSchema = new mongoose.Schema({
 
     dezenas: [Number],
 
+    valor: Number,
+
+    paymentId: String,
+
+    status: {
+        type: String,
+        default: "PENDING" // 👈 importante
+    },
+
+    pixQrCode: String,
+
+    pagoEm: Date, // 👈 quando confirmar pagamento
+
     createdAt: {
         type: Date,
         default: Date.now

@@ -1,5 +1,6 @@
 const bixos = require("../data/bixos");
 const UserSchema = require("../model/game.js");
+const { criarPagamentoPix } = require("../service/asaasService");
 
 global.estados = global.estados || {};
 const estados = global.estados;
@@ -27,7 +28,7 @@ function toWhatsappJid(numero) {
 }
 
 function telefoneValido(numero) {
-    return /\d{10,11}/.test(numero.replace(/\D/g, ""));
+    return /\d{10,11}/.test(String(numero || "").replace(/\D/g, ""));
 }
 
 function buscarBixo(nome) {
@@ -60,14 +61,18 @@ function gerarTabela() {
     return msg;
 }
 
-// ================= RIFA CORE =================
+
 async function process(context) {
     let { text, from } = context;
 
     text = String(text || "").trim();
+
     const lower = removerAcentos(text);
 
-    const sessionId = from;
+    // 🔥 PADRONIZAÇÃO (EVITA QUEBRA DE FLUXO)
+    const sessionId = toWhatsappJid(from);
+
+    if (!sessionId) return { text: "❌ jid inválido" };
 
     if (!estados[sessionId]) {
         estados[sessionId] = {
@@ -85,7 +90,7 @@ async function process(context) {
 
         const nomes = text.split(",").map(n => n.trim()).filter(Boolean);
 
-        if (!nomes.length) {
+        if (!nomes.length && estado.etapa === "rifa") {
             return { text: gerarTabela() };
         }
 
@@ -107,7 +112,11 @@ async function process(context) {
             }
 
             compras.push(bixo);
-            respostas.push(`✅ ${bixo.nome} selecionado.`);
+           const valorBixo = 10;
+
+            respostas.push(
+                `✅ ${bixo.nome} selecionado.\n💵 *Valor deste bicho:* R$ ${valorBixo.toFixed(2)}`
+            );
         }
 
         if (compras.length > 0) {
@@ -138,24 +147,25 @@ async function process(context) {
     if (estado.etapa === "telefone") {
 
         if (!telefoneValido(text)) {
-            return { text: "❌ Telefone inválido." };
+            return { text: "❌ Telefone inválido. Digite novamente:" };
         }
 
         estado.telefone = text;
 
-        const game = await createGame({
+        const result = await createGame({
             name: estado.nome,
             phone: estado.telefone,
             bixosEscolhidos: estado.tempCompras
         });
 
-        if (!game) {
+        if (!result) {
             return { text: "❌ Erro ao salvar compra." };
         }
 
-        // marca venda
+        const { game, pagamento } = result;
+
         for (const b of estado.tempCompras) {
-            b.vendido = true;
+            b.reservado = true;
             b.dono = estado.telefone;
         }
 
@@ -163,7 +173,6 @@ async function process(context) {
             .map(b => `🐾 ${b.nome} - ${b.dezenas?.join(", ")}`)
             .join("\n");
 
-        // reset correto
         estados[sessionId] = {
             etapa: "rifa",
             tempCompras: [],
@@ -173,17 +182,16 @@ async function process(context) {
 
         return {
             text:
-                "✅ COMPRA CONFIRMADA!\n\n" +
-                `👤 Nome: ${estado.nome}\n` +
-                `📱 Telefone: ${estado.telefone}\n\n` +
-                resumo
-        };
+              
+                `💵 *Valor:* R$ ${pagamento.valor.toFixed(2)}\n\n` +
+                pagamento.copiaCola + "\n\n"
+            };
     }
 
     return { text: "❌ fluxo inválido. Digite menu." };
 }
 
-// ================= CREATE GAME =================
+
 async function createGame({ name, phone, bixosEscolhidos }) {
     try {
 
@@ -196,28 +204,51 @@ async function createGame({ name, phone, bixosEscolhidos }) {
         }
 
         const dezenas = bixosEscolhidos.flatMap(b => b.dezenas || []);
+        const valor = bixosEscolhidos.length * 10;
+
+        const pagamento = await criarPagamentoPix({
+            nome: name,
+            telefone: phone,
+            valor,
+            descricao: `Compra de ${bixosEscolhidos.length} bixos`
+        });
+
+        if (!pagamento) {
+            throw new Error("Erro ao gerar pagamento");
+        }
 
         console.log("📦 COMPRA SALVANDO:", {
             name,
             phone,
-            bixos: bixosEscolhidos.length
+            valor,
+            paymentId: pagamento.id
         });
 
         const game = await UserSchema.create({
             nome: name,
-            phone: phone, // 🔥 identidade REAL
+            phone: phone,
+
             bixos: bixosEscolhidos.map(b => ({
                 nome: b.nome,
                 dezenas: b.dezenas || []
             })),
+
             dezenas,
+            valor,
+            paymentId: pagamento.id,
+            status: pagamento.status,
+            pixQrCode: pagamento.copiaCola,
+
             createdAt: new Date()
         });
 
-        return game;
+        return {
+            game,
+            pagamento
+        };
 
     } catch (err) {
-        console.error("🔥 ERRO MONGO:", err.message);
+        console.error("🔥 ERRO CREATE GAME:", err.message);
         return null;
     }
 }

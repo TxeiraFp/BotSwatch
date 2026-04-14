@@ -9,14 +9,12 @@ const path = require('path');
 const dotenv = require('dotenv');
 const mongoose = require('mongoose');
 
-// 🔹 Controllers
 const { process: menuController } = require('./bot/controllers/menuController.js');
 dotenv.config();
 
 const MONGO_URI = process.env.MONGO_URI;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// 🔌 Conexão MongoDB
 mongoose.connect(MONGO_URI)
     .then(() => console.log('✅ Conectado ao MongoDB'))
     .catch(err => {
@@ -28,18 +26,16 @@ let sock;
 
 async function startBot() {
 
-    // 🔑 Autenticação
     const { state, saveCreds } = await useMultiFileAuthState(path.join('bot', 'auth_info'));
     const { version } = await fetchLatestBaileysVersion();
-
-    // 🔹 Cria socket
+  
     sock = makeWASocket({
         version,
         auth: state,
         printQRInTerminal: false,
         browser: ['Ubuntu', 'Chrome', '20.0.0'],
 
-        // ⚠ evita bad-request no init
+     
         syncFullHistory: false,
         ignoreChats: true,
         getMessage: async () => null,
@@ -48,7 +44,6 @@ async function startBot() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // 🔥 Conexão
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -76,32 +71,44 @@ async function startBot() {
         }
     });
 
-    // 📩 Recebendo mensagens
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+
+   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
 
     for (const msg of messages) {
         if (!msg?.message || msg.key.fromMe) continue;
 
         const from = msg.key.remoteJid;
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
 
-        if (!text) continue;
-        if (from.endsWith('@g.us')) continue; // ignora grupos
+        // 🔥 captura todos os tipos de mensagem (texto, botão, lista, mídia)
+        const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            msg.message.imageMessage?.caption ||
+            msg.message.videoMessage?.caption ||
+            msg.message.buttonsResponseMessage?.selectedButtonId ||
+            msg.message.listResponseMessage?.singleSelectReply?.selectedRowId ||
+            "";
+
+        // 🔥 evita crash com texto vazio
+        if (!text || text.trim() === "") continue;
+
+        // ignora grupos
+        if (from.endsWith('@g.us')) continue;
 
         console.log(`💬 ${from}: ${text}`);
 
         try {
-           // server.js
-            const result = await menuController(from, text, sock);
+            const result = await menuController(from, text, sock, from);
 
-            if (!result) return;
+            if (!result) continue;
 
             if (typeof result === "string") {
                 await sock.sendMessage(from, { text: result });
             } else {
                 await sock.sendMessage(from, result);
             }
+
         } catch (err) {
             console.error('❌ Erro no menuController:', err);
         }

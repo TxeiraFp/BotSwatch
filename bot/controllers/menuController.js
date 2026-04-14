@@ -6,7 +6,11 @@ const {
 
 const { toWhatsappJid } = require('../utils/jid');
 
-const estados = {};
+// 🔥 estado global (tem que existir)
+global.estados = global.estados || {};
+const estados = global.estados;
+
+// controle de primeira mensagem
 const firstMessage = {};
 
 async function process(from, text, sock) {
@@ -14,18 +18,20 @@ async function process(from, text, sock) {
     if (typeof text !== "string") text = String(text || "");
     const lower = text.toLowerCase().trim();
 
+    // 🔥 padroniza ID de sessão
     const jid = toWhatsappJid(from);
     if (!jid) return { text: "❌ jid inválido" };
 
     // ================= PRIMEIRA MENSAGEM =================
-    if (!firstMessage[from]) {
-        firstMessage[from] = true;
+    if (!firstMessage[jid]) {
+        firstMessage[jid] = true;
 
         estados[jid] = { etapa: "menu" };
 
         return menuInicial();
     }
 
+    // garante estado
     if (!estados[jid]) {
         estados[jid] = { etapa: "menu" };
     }
@@ -45,7 +51,7 @@ async function process(from, text, sock) {
             estado.etapa = "rifa";
 
             return await bixoProcess({
-                from,
+                from: jid,
                 text: "",
                 estado
             });
@@ -76,7 +82,7 @@ async function process(from, text, sock) {
     // ================= RIFA =================
     if (estado.etapa === "rifa") {
         return await bixoProcess({
-            from,
+            from: jid,   // 🔥 PADRONIZADO
             text,
             estado
         });
