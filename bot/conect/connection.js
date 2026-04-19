@@ -71,24 +71,25 @@ async function startConnection(botName = 'auth_info') {
                 if (!msg?.message || msg.key.fromMe) continue;
 
                 const sender = msg.key.remoteJid;
+
+                // ❌ ignora grupos e LID
+                if (sender.includes("@g.us")) continue;
+                if (sender.includes("@lid")) continue;
+
+                // ✔ extrai número limpo
+                const phone = sender.replace(/\D/g, "");
+
                 const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
                 if (!text) continue;
 
-                // ❌ Ignora grupos
-                if (sender.endsWith('@g.us')) continue;
+                console.log(`[${botName}] 💬 ${phone}: ${text}`);
 
-                console.log(`[${botName}] 💬 ${sender}: ${text}`);
-
-                // 🔹 Resposta funcional
                 await conn.sendMessage(sender, { text: '✅ Mensagem recebida!' });
 
             } catch (err) {
-                if (err?.message.includes('bad-request')) {
-                    console.warn(`[${botName}] ⚠ Ignorado bad-request`);
-                    continue;
-                }
-                console.error(`[${botName}] ❌ Erro ao processar mensagem:`, err);
+                console.error(err);
             }
+
         }
     });
 

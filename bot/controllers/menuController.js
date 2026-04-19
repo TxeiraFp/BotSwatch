@@ -1,72 +1,80 @@
-const {
+const { 
     process: bixoProcess,
     buscarResultadoFederal,
     historicoFederal
 } = require('../service/bixoService.js');
 
-const { toWhatsappJid } = require('../utils/jid');
+const { normalizeJid } = require('../utils/jid');
 
-// 🔥 estado global (tem que existir)
 global.estados = global.estados || {};
 const estados = global.estados;
 
-// controle de primeira mensagem
-const firstMessage = {};
+// ================= MENU =================
+function menuInicial() {
+    return {
+        image: { url: './assets/rifa.jpeg' },
+        caption: `🎉 MENU\n\n1️⃣ Jogar\n2️⃣ Resultado\n3️⃣ Histórico`
+    };
+}
 
-async function process(from, text, sock) {
+// ================= SESSION =================
+function getSessionId(from) {
+    if (!from || typeof from !== "string") return null;
 
-    if (typeof text !== "string") text = String(text || "");
-    const lower = text.toLowerCase().trim();
+    // remove sufixos conhecidos, mantém só o número
+    const jid = from.replace(/@lid|@s\.whatsapp\.net/g, "").trim();
 
-    // 🔥 padroniza ID de sessão
-    const jid = toWhatsappJid(from);
-    if (!jid) return { text: "❌ jid inválido" };
+    return jid || null;
+}
 
-    // ================= PRIMEIRA MENSAGEM =================
-    if (!firstMessage[jid]) {
-        firstMessage[jid] = true;
+// ================= MAIN =================
+async function process(context) {
+    let { from, text } = context;
 
-        estados[jid] = { etapa: "menu" };
-
-        return menuInicial();
+    if (!from || typeof from !== "string") {
+        console.log("❌ from é null ou inválido");
+        return { text: "❌ sessão inválida" };
     }
 
-    // garante estado
-    if (!estados[jid]) {
-        estados[jid] = { etapa: "menu" };
+    const jid = getSessionId(from);
+
+    if (!jid) {
+        console.log("❌ jid inválido após normalização");
+        return { text: "❌ sessão inválida" };
     }
 
+    text = String(text || "").trim();
+    const lower = text.toLowerCase();
+
+    estados[jid] ??= { etapa: "menu" };
     const estado = estados[jid];
 
-    // ================= COMANDO MENU GLOBAL =================
+    console.log("\n================ DEBUG =================");
+    console.log("FROM RAW:", from);
+    console.log("SESSION ID:", jid);
+    console.log("ETAPA ATUAL:", estado.etapa);
+    console.log("TEXTO:", text);
+
+    // ================= MENU =================
     if (lower === "menu") {
         estado.etapa = "menu";
         return menuInicial();
     }
 
-    // ================= MENU =================
     if (estado.etapa === "menu") {
-
         if (lower === "1") {
             estado.etapa = "rifa";
-
-            return await bixoProcess({
-                from: jid,
-                text: "",
-                estado
-            });
+            return await bixoProcess({ from: jid, text: "", estado });
         }
 
         if (lower === "2") {
             const ultimo = await buscarResultadoFederal();
             if (!ultimo) return { text: "❌ Sem resultado." };
-
             return { text: `🏆 ${ultimo.bixo} - ${ultimo.numero}` };
         }
 
         if (lower === "3") {
             const historico = await historicoFederal();
-
             return {
                 text: historico.map(r =>
                     `📅 ${r.data.toLocaleDateString()} - ${r.bixo}`
@@ -74,31 +82,15 @@ async function process(from, text, sock) {
             };
         }
 
-        return {
-            text: "❌ opção inválida\n\n👉 Digite *menu* para ver as opções."
-        };
+        return { text: "❌ opção inválida\n\n👉 Digite *menu*" };
     }
 
     // ================= RIFA =================
     if (estado.etapa === "rifa") {
-        return await bixoProcess({
-            from: jid,   // 🔥 PADRONIZADO
-            text,
-            estado
-        });
+        return await bixoProcess({ from: jid, text, estado });
     }
 
-    // ================= FALLBACK GLOBAL =================
-    return {
-        text: "❌ Você está fora do fluxo.\n👉 Digite *menu* para acessar o sistema."
-    };
-}
-
-function menuInicial() {
-    return {
-        image: { url: './assets/rifa.jpeg' },
-        caption: `🎉 MENU\n\n1️⃣ Jogar\n2️⃣ Resultado\n3️⃣ Histórico`
-    };
+    return { text: "❌ fora do fluxo\n👉 digite menu" };
 }
 
 module.exports = { process };

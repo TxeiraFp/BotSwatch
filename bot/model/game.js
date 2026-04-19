@@ -3,7 +3,6 @@ const mongoose = require("mongoose");
 const GameSchema = new mongoose.Schema({
     nome: String,
     phone: String,
-
     bixos: [
         {
             nome: String,

@@ -4,17 +4,21 @@ const {
     DisconnectReason, 
     fetchLatestBaileysVersion 
 } = require('@whiskeysockets/baileys');
+
 const qrcode = require('qrcode-terminal');
 const path = require('path');
 const dotenv = require('dotenv');
 const mongoose = require('mongoose');
 
-const { process: menuController } = require('./bot/controllers/menuController.js');
+const { normalizeJid } = require('./bot/utils/jid');
+const { process: menuController } = require('./bot/controllers/menuController');
+
 dotenv.config();
 
 const MONGO_URI = process.env.MONGO_URI;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
+// ================= MONGO =================
 mongoose.connect(MONGO_URI)
     .then(() => console.log('✅ Conectado ao MongoDB'))
     .catch(err => {
@@ -24,18 +28,21 @@ mongoose.connect(MONGO_URI)
 
 let sock;
 
+// ================= BOT START =================
 async function startBot() {
 
-    const { state, saveCreds } = await useMultiFileAuthState(path.join('bot', 'auth_info'));
+    const { state, saveCreds } = await useMultiFileAuthState(
+        path.join('bot', 'auth_info')
+    );
+
     const { version } = await fetchLatestBaileysVersion();
-  
+
     sock = makeWASocket({
         version,
         auth: state,
         printQRInTerminal: false,
         browser: ['Ubuntu', 'Chrome', '20.0.0'],
 
-     
         syncFullHistory: false,
         ignoreChats: true,
         getMessage: async () => null,
@@ -44,6 +51,7 @@ async function startBot() {
 
     sock.ev.on('creds.update', saveCreds);
 
+    // ================= CONNECTION =================
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -59,10 +67,11 @@ async function startBot() {
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
+
             console.log('❌ Conexão fechada:', statusCode);
 
             if (statusCode === DisconnectReason.loggedOut) {
-                console.log('⚠️ Sessão inválida. Apague a pasta bot/auth_info e escaneie novamente.');
+                console.log('⚠️ Sessão inválida. Apague bot/auth_info e escaneie novamente.');
                 return;
             }
 
@@ -71,49 +80,92 @@ async function startBot() {
         }
     });
 
+    // ================= MESSAGES =================
+    sock.ev.on("messages.upsert", async ({ messages }) => {
 
-   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+    if (!messages || !Array.isArray(messages)) return;
 
     for (const msg of messages) {
-        if (!msg?.message || msg.key.fromMe) continue;
 
-        const from = msg.key.remoteJid;
+        if (!msg?.message) continue;
+        if (msg.key?.fromMe) continue;
 
-        // 🔥 captura todos os tipos de mensagem (texto, botão, lista, mídia)
-        const text =
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            msg.message.imageMessage?.caption ||
-            msg.message.videoMessage?.caption ||
-            msg.message.buttonsResponseMessage?.selectedButtonId ||
-            msg.message.listResponseMessage?.singleSelectReply?.selectedRowId ||
+        const rawJid = msg?.key?.remoteJid;
+
+        // 🔥 PROTEÇÃO 1: evita null crash
+        if (!rawJid || typeof rawJid !== "string") continue;
+
+        const from = normalizeJid(rawJid);
+
+        // 🔥 PROTEÇÃO 2: evita crash no endsWith
+        if (!from || typeof from !== "string") continue;
+        if (from.endsWith("@g.us")) continue;
+
+        console.log("RAW:", rawJid);
+        console.log("FROM:", from);
+
+        const messageContent =
+            msg.message?.conversation ||
+            msg.message?.extendedTextMessage?.text ||
+            msg.message?.imageMessage?.caption ||
+            msg.message?.videoMessage?.caption ||
+            msg.message?.buttonsResponseMessage?.selectedButtonId ||
+            msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
+            msg.message?.ephemeralMessage?.message?.conversation ||
             "";
 
-        // 🔥 evita crash com texto vazio
-        if (!text || text.trim() === "") continue;
-
-        // ignora grupos
-        if (from.endsWith('@g.us')) continue;
+        const text = String(messageContent || "").trim();
 
         console.log(`💬 ${from}: ${text}`);
 
         try {
-            const result = await menuController(from, text, sock, from);
+            const estadoGlobal = global.estados?.[from];
+
+            const result = await menuController({
+                from,
+                text,
+                sock,
+                estado: estadoGlobal
+            });
 
             if (!result) continue;
 
             if (typeof result === "string") {
                 await sock.sendMessage(from, { text: result });
-            } else {
-                await sock.sendMessage(from, result);
+                continue;
             }
 
+            if (result.text) {
+                await sock.sendMessage(from, { text: result.text });
+                continue;
+            }
+
+            if (result.image) {
+                await sock.sendMessage(from, {
+                    image: result.image,
+                    caption: result.caption || ""
+                });
+                continue;
+            }
+
+            if (result.video) {
+                await sock.sendMessage(from, {
+                    video: result.video,
+                    caption: result.caption || ""
+                });
+                continue;
+            }
+
+            await sock.sendMessage(from, {
+                text: "❌ erro ao processar resposta"
+            });
+
         } catch (err) {
-            console.error('❌ Erro no menuController:', err);
+            console.error("❌ Erro menuController:", err);
         }
     }
 });
 }
 
+// ================= START =================
 startBot();

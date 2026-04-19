@@ -1,15 +1,19 @@
-function toWhatsappJid(numero) {
-    if (!numero) return null;
+function normalizeJid(jid) {
+    if (!jid || typeof jid !== "string") return null;
 
-    const str = String(numero);
+    // 🚫 ignora grupo
+    if (jid.endsWith("@g.us")) return null;
 
-    // já é jid válido (WhatsApp ou LID ou grupo)
-    if (str.includes("@")) {
-        return str;
-    }
+    // ✅ mantém LID intacto (CRÍTICO)
+    if (jid.endsWith("@lid")) return jid;
 
-    // limpa só se for número puro
-    return str.replace(/\D/g, "") + "@s.whatsapp.net";
+    // ✅ já padrão WhatsApp
+    if (jid.endsWith("@s.whatsapp.net")) return jid;
+
+    // fallback apenas se for número cru
+    const num = jid.replace(/\D/g, "");
+    if (!num) return null;
+
+    return `${num}@s.whatsapp.net`;
 }
-
-module.exports = { toWhatsappJid };
+module.exports = { normalizeJid };
